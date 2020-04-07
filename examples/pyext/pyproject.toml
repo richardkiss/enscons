@@ -1,0 +1,26 @@
+[build-system]
+requires = ["pytoml>=0.1", "enscons>=0.23", "pybind11", "setuptools_scm[toml]>=3.5.0"]
+build-backend = "enscons.api"
+
+[tool.enscons]
+# this name goes into pypi
+name = "spam"
+classifiers = ["Development Status :: 5 - Production/Stable",
+    "Intended Audience :: Developers",
+    "Programming Language :: Python :: 3.7",
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: Implementation :: CPython",
+    "Programming Language :: C",
+    ]
+author="YOUR NAME"
+author_email="email@domain.com"
+url = "https://github.com/YOUR_GITHUB_ID/REPO_NAME"
+license="MIT License"
+tests_require = ["pytest", "coverage"]
+packages = []
+description="Short description"
+description_file="README.rst"
+
+# pip install '.[test]' will install pytest & pytest-cov
+[tool.enscons.extras_require]
+test = ["pytest", "pytest-cov"]

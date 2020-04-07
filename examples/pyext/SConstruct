@@ -1,0 +1,130 @@
+# Build with `scons` or `pip wheel .`, or any other pep517-compliant builder
+
+
+PYPI_NAME = "spam"
+HEADER_PATHS = []
+SOURCE_DIST_FILES = ["src/spam_system.c"]
+CPP_SOURCE = [_ for _ in SOURCE_DIST_FILES if _.endswith(".c")]
+
+###########################
+
+import distutils.sysconfig
+import os
+import sys
+
+import enscons
+import enscons.cpyext
+import pytoml as toml
+import setuptools_scm
+
+
+def get_metadata():
+    metadata = dict(toml.load(open("pyproject.toml")))["tool"]["enscons"]
+
+    # use setuptools_scm to get the version number from git tags
+    version = setuptools_scm.get_version(local_scheme="no-local-version", root="../..")
+
+    metadata["version"] = version
+
+    # add an extra piece of metadata so we can examine wheels to confirm
+    # what exact git hash they were built on
+
+    metadata["scm_version"] = setuptools_scm.get_version(root="../..")
+    return metadata
+
+
+# we have a choice of get_abi3_tag, get_binary_tag, get_universal_tag here
+# get_abi3_tag doesn't work probably because pybind11 uses some API that's
+# not supported in abi3
+
+full_tag = enscons.get_binary_tag()
+#full_tag = enscons.get_abi3_tag()
+#full_tag = enscons.get_universal_tag()
+
+
+MSVC_VERSION = None
+SHLIBSUFFIX = None
+TARGET_ARCH = None  # only set for win32
+
+# we need to set stuff up differently for Windows because it's funky
+if sys.platform == "win32":
+    import distutils.msvccompiler
+
+    MSVC_VERSION = str(distutils.msvccompiler.get_build_version())  # it is a float
+    SHLIBSUFFIX = ".pyd"
+    TARGET_ARCH = "x86_64" if sys.maxsize.bit_length() == 63 else "x86"
+
+
+env = Environment(
+    tools=["default", "packaging", enscons.generate, enscons.cpyext.generate],
+    PACKAGE_METADATA=get_metadata(),
+    WHEEL_TAG=full_tag,
+    MSVC_VERSION=MSVC_VERSION,
+    TARGET_ARCH=TARGET_ARCH,
+)
+env["CPPPATH"].extend(HEADER_PATHS)
+
+
+# seems to be related to abi3 (see c-api comment above)
+
+use_py_limited = "abi3" in full_tag
+
+ext_filename = enscons.cpyext.extension_filename(PYPI_NAME, abi3=use_py_limited)
+
+# Add automatic source files, plus any other needed files.
+sdist_source = SOURCE_DIST_FILES + [
+    "PKG-INFO",
+    "pyproject.toml",
+    "SConstruct",
+    "README.rst",
+]
+
+# build source distribution with "scons dist"
+sdist = env.SDist(source=sdist_source)
+env.Alias("sdist", sdist)
+
+
+# for abi3 we need -DPy_LIMITED_API=0x03030000 to modify the Python.h headers
+
+PARSE_FLAGS = "-DPy_LIMITED_API=0x03030000" if use_py_limited else ""
+
+CPPFLAGS = []
+
+if sys.platform == "darwin":
+    CPPFLAGS.append("-mmacosx-version-min=10.9")
+
+if sys.platform == "win32":
+    CPPFLAGS.append("/EHsc")
+
+
+extension = env.SharedLibrary(
+    # we need to pass the PATH environment variable through from the shell so we
+    # can find the g++ compiler on the docker image provided by cibuildwheel
+    ENV={"PATH": os.environ["PATH"]},
+    target=ext_filename,
+    source=CPP_SOURCE,
+    LIBPREFIX="",
+    SHLIBSUFFIX=SHLIBSUFFIX,
+    CPPFLAGS=CPPFLAGS,
+    parse_flags=PARSE_FLAGS,
+    # if you have some flags you know you want passed to the compiler but don't
+    # know what they refer to in scons, you can use "parse_flags"
+    # and it will reverse-engineer them into the scons env
+    # if it doesn't understand how to do so (like "-std=c++11"), it will ignore them
+)
+
+
+# Only *.py is included automatically by setup2toml.
+# Add extra 'purelib' files or package_data here.
+py_source = []
+
+platlib = env.Whl("platlib", py_source + extension, root="")
+wheel = env.WhlFile(source=platlib)
+
+# "scons develop" for use with "pip install -e"
+
+develop = env.Command("#DEVELOP", enscons.egg_info_targets(env), enscons.develop)
+env.Alias("develop", develop)
+
+# by default, build the wheel and the sdist
+env.Default(wheel, sdist)
